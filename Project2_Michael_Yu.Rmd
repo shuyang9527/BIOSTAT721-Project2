@@ -1,0 +1,182 @@
+---
+title: "Air Quality at Raleigh-Durham International Airport"
+author: "Michael Yu"
+output:
+  word_document:
+    reference_docx: "reference.docx"
+---
+
+[GitHub Repository](https://github.com/shuyang9527/BIOSTAT721-Project2)
+
+This report summarizes daily carbon monoxide (CO), fine particulate matter
+(PM2.5), and ozone (O3) measurements from the EPA monitor at Raleigh-Durham
+International Airport (RDU). The data cover 2018 and 2019, and January through
+April of 2020.
+
+```{r prepare-data, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load the cleaning function and read all three files using ppm for ozone.
+source("clean_air_quality.R")
+
+aq_2018 <- clean_air_quality("data/AQ_2018.csv")
+aq_2019 <- clean_air_quality("data/AQ_2019.csv")
+aq_2020 <- clean_air_quality("data/AQ_2020.csv")
+
+air_quality <- rbind(aq_2018, aq_2019, aq_2020)
+
+# Confirm expected row counts, unique dates, and nonnegative concentrations.
+stopifnot(
+  nrow(aq_2018) == 361L,
+  nrow(aq_2019) == 365L,
+  nrow(aq_2020) == 121L,
+  !anyNA(air_quality$date),
+  anyDuplicated(air_quality$date) == 0L,
+  !any(air_quality[c("co", "pm25", "o3")] < 0, na.rm = TRUE)
+)
+
+# Create common month and year labels for the summaries and plots.
+air_quality$year <- format(air_quality$date, "%Y")
+air_quality$month <- factor(
+  format(air_quality$date, "%m"),
+  levels = sprintf("%02d", 1:12),
+  labels = month.abb
+)
+```
+
+## Annual Minimum and Maximum Daily Concentrations
+
+```{r annual-tables, results='asis'}
+pollutant_labels <- c(
+  co = "Carbon monoxide (ppm)",
+  pm25 = "Fine particulate matter (µg/m³ LC)",
+  o3 = "Ozone (ppm)"
+)
+
+# Summarize the observed daily concentrations separately for each year.
+for (year in c("2018", "2019", "2020")) {
+  year_data <- air_quality[air_quality$year == year, ]
+  measurements <- year_data[names(pollutant_labels)]
+
+  annual_range <- data.frame(
+    Pollutant = unname(pollutant_labels),
+    Minimum = vapply(measurements, min, numeric(1), na.rm = TRUE),
+    Maximum = vapply(measurements, max, numeric(1), na.rm = TRUE)
+  )
+
+  period <- if (year == "2020") "January–April 2020" else year
+
+  print(knitr::kable(
+    annual_range,
+    digits = 3,
+    format.args = list(nsmall = 3),
+    row.names = FALSE,
+    caption = paste(
+      "Minimum and maximum daily pollutant concentrations at RDU:",
+      period
+    )
+  ))
+  cat("\n\n")
+}
+```
+
+## Monthly Carbon Monoxide and Ozone Concentrations
+
+```{r monthly-co-ozone, fig.width=7, fig.height=5, fig.cap="Monthly mean CO and ozone concentrations at RDU with 95% confidence intervals."}
+# Pool available daily readings by calendar month across years.
+monthly_co_o3 <- air_quality |>
+  dplyr::select(month, co, o3) |>
+  tidyr::pivot_longer(
+    cols = c(co, o3),
+    names_to = "pollutant",
+    values_to = "concentration"
+  ) |>
+  dplyr::filter(!is.na(concentration)) |>
+  dplyr::group_by(pollutant, month) |>
+  dplyr::summarise(
+    n = dplyr::n(),
+    average = mean(concentration),
+    se = sd(concentration) / sqrt(n),
+    lower = average - 1.96 * se,
+    upper = average + 1.96 * se,
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    pollutant = factor(
+      pollutant,
+      levels = c("co", "o3"),
+      labels = c("Carbon monoxide", "Ozone")
+    )
+  )
+
+ggplot2::ggplot(
+  monthly_co_o3,
+  ggplot2::aes(x = month, y = average, color = pollutant)
+) +
+  ggplot2::geom_errorbar(
+    ggplot2::aes(ymin = lower, ymax = upper),
+    width = 0.18
+  ) +
+  ggplot2::geom_point(size = 2.4) +
+  ggplot2::facet_wrap(~ pollutant, ncol = 1, scales = "free_y") +
+  ggplot2::scale_color_manual(values = c(
+    "Carbon monoxide" = "#0072B2",
+    "Ozone" = "#D55E00"
+  )) +
+  ggplot2::labs(
+    x = "Month",
+    y = "Mean concentration (ppm)"
+  ) +
+  ggplot2::theme_minimal(base_size = 12) +
+  ggplot2::theme(legend.position = "none")
+```
+
+The panels use separate vertical scales so that month-to-month changes in both
+pollutants are visible. January through April pool daily measurements from
+three years; May through December pool measurements from two.
+
+## Monthly PM2.5 Distributions by Year
+
+```{r monthly-pm25, fig.width=7, fig.height=4.5, fig.cap="Daily PM2.5 concentrations by month and year at RDU. The 2020 data cover January through April only."}
+# Group the daily PM2.5 readings by calendar month and year.
+pm25_data <- air_quality |>
+  dplyr::filter(!is.na(pm25)) |>
+  dplyr::mutate(year = factor(year))
+
+ggplot2::ggplot(
+  pm25_data,
+  ggplot2::aes(x = month, y = pm25, fill = year)
+) +
+  ggplot2::geom_boxplot(
+    width = 0.75,
+    outlier.size = 1,
+    outlier.alpha = 0.55
+  ) +
+  ggplot2::scale_fill_manual(values = c(
+    "2018" = "#0072B2",
+    "2019" = "#E69F00",
+    "2020" = "#009E73"
+  )) +
+  ggplot2::labs(
+    x = "Month",
+    y = "Daily PM2.5 concentration (µg/m³ LC)",
+    fill = "Year"
+  ) +
+  ggplot2::theme_minimal(base_size = 12) +
+  ggplot2::theme(
+    legend.position = "top",
+    panel.grid.major.x = ggplot2::element_blank()
+  )
+```
+
+Grouped boxplots show how the median and spread of daily PM2.5 concentrations
+vary across years within each month.
+
+## Interpretation
+
+Mean CO concentrations were highest in late fall and early winter, while mean ozone concentrations were highest in June. The highest observed daily PM2.5
+concentration was 31.200 µg/m³ LC in February 2020, even though that month had a lower median than February of the previous two years. Since the 2020 data end in April, they cannot support a full-year comparison with 2018 and 2019.
+
+## AI Use Statement
+
+I used ChatGPT to help draft the R code for cleaning, summarizing, and plotting the data. I ran the code myself in RStudio and checked the results, including cleaned row counts, date uniqueness, and the tables and figures in the Word document.
